@@ -18,6 +18,10 @@ const els = {
   amountDisplay: document.getElementById("amount-display"),
   calcExpr: document.getElementById("calc-expr"),
   payLabel: document.getElementById("pay-label"),
+  cardField: document.getElementById("card-field"),
+  cardPicks: document.getElementById("card-picks"),
+  cardAdd: document.getElementById("card-add"),
+  cardNew: document.getElementById("card-new"),
   note: document.getElementById("note"),
   repeat: document.getElementById("repeat"),
   repeatField: document.getElementById("repeat-field"),
@@ -71,6 +75,9 @@ const calc = { entry: "0", acc: null, op: null, fresh: true, error: "" };
 const ACCOUNTS = { card: "카드", check: "체크카드", bank: "통장" };
 const OP_LABEL = { "+": "+", "-": "−", "*": "×", "/": "÷" };
 let preferCategoryId = null;
+let preferPayId = null;
+let payAccountShown = "";
+const selectedPay = { card: "", check: "", bank: "" };
 let lockUntil = 0;
 let toastTimer = 0;
 const pending = { type: null, id: null, timer: 0 };
@@ -95,6 +102,7 @@ function seed() {
     transactions: [],
     recurring: [],
     goals: [],
+    pays: [],
   };
 }
 
@@ -110,6 +118,14 @@ function load() {
 
 function normalize(data) {
   if (!data || !Array.isArray(data.categories) || !Array.isArray(data.transactions)) return seed();
+  const pays = readPays(data);
+  const paysById = new Map(pays.map((pay) => [pay.id, pay]));
+  const payIdFor = (record) => {
+    const account = ACCOUNTS[record.account] ? record.account : null;
+    const raw = String(record.payId || record.cardId || "");
+    const pay = paysById.get(raw);
+    return account && pay && pay.account === account ? raw : null;
+  };
   const categories = data.categories.filter(isCategory).map((category) => ({
     id: String(category.id),
     name: String(category.name).trim().slice(0, 20),
@@ -124,6 +140,7 @@ function normalize(data) {
     note: String(tx.note || "").trim().slice(0, 40),
     amount: Math.round(Number(tx.amount)),
     account: ACCOUNTS[tx.account] ? tx.account : null,
+    payId: payIdFor(tx),
     createdAt: typeof tx.createdAt === "string" ? tx.createdAt : new Date().toISOString(),
     recurringId: typeof tx.recurringId === "string" ? tx.recurringId : null,
   }));
@@ -133,6 +150,7 @@ function normalize(data) {
     categoryId: String(rule.categoryId),
     amount: Math.round(Number(rule.amount)),
     account: ACCOUNTS[rule.account] ? rule.account : null,
+    payId: payIdFor(rule),
     note: String(rule.note || "").trim().slice(0, 40),
     frequency: rule.frequency === "weekly" ? "weekly" : "monthly",
     startDate: rule.startDate,
@@ -148,7 +166,7 @@ function normalize(data) {
     amount: Math.round(Number(goal.amount)),
     createdAt: typeof goal.createdAt === "string" ? goal.createdAt : new Date().toISOString(),
   })) : [];
-  return { version: 1, categories, transactions, recurring, goals };
+  return { version: 1, categories, transactions, recurring, goals, pays };
 }
 
 function isGoal(goal) {
@@ -164,6 +182,21 @@ function isRecurring(rule) {
     && (rule.kind === "expense" || rule.kind === "income")
     && typeof rule.categoryId === "string"
     && Number.isInteger(Number(rule.amount)) && Number(rule.amount) > 0 && Number(rule.amount) <= 100000000000;
+}
+
+function isPay(pay) {
+  return pay && typeof pay.id === "string" && typeof pay.name === "string" && pay.name.trim();
+}
+
+function readPays(data) {
+  const source = Array.isArray(data.pays)
+    ? data.pays
+    : (Array.isArray(data.cards) ? data.cards.map((card) => ({ ...card, account: "card" })) : []);
+  return source.filter(isPay).map((pay) => ({
+    id: String(pay.id),
+    name: String(pay.name).trim().slice(0, 20),
+    account: ACCOUNTS[pay.account] ? pay.account : "card",
+  }));
 }
 
 function isCategory(category) {
@@ -250,6 +283,36 @@ function setKind(kind) {
   if (input) input.checked = true;
 }
 
+function payById(id) {
+  return state.pays.find((pay) => pay.id === id) || null;
+}
+
+function paysOf(account) {
+  return state.pays.filter((pay) => pay.account === account);
+}
+
+function payNoun(account) {
+  return ACCOUNTS[account] || "결제";
+}
+
+function withJosa(word, pair) {
+  const last = word.charCodeAt(word.length - 1);
+  const batchim = last >= 0xac00 && last <= 0xd7a3 ? (last - 0xac00) % 28 : 0;
+  const [withBatchim, without] = pair;
+  return `${word}${batchim && batchim !== 8 ? withBatchim : without}`;
+}
+
+function withTopic(word) {
+  return withJosa(word, ["은", "는"]);
+}
+
+function accountLabel(account, payId) {
+  const base = ACCOUNTS[account] || "";
+  if (!base) return "";
+  const pay = payById(payId);
+  return pay && pay.account === account ? `${base} · ${pay.name}` : base;
+}
+
 function categoryById(id) {
   return state.categories.find((category) => category.id === id) || null;
 }
@@ -319,7 +382,14 @@ function clearPendingDelete() {
   pending.id = null;
   document.querySelectorAll(".is-confirm").forEach((button) => {
     button.classList.remove("is-confirm");
-    button.textContent = button.dataset.label || "삭제";
+    if (button.classList.contains("tx-icon")) {
+      button.innerHTML = txGlyph("delete");
+      button.setAttribute("aria-label", button.dataset.label || "삭제");
+    }
+    else {
+      button.textContent = button.dataset.label || "삭제";
+      if (button.dataset.cardDelete) button.setAttribute("aria-label", "삭제");
+    }
   });
 }
 
@@ -608,6 +678,31 @@ function renderFormMode() {
   els.repeatUntilField.hidden = !repeating;
   els.repeatHint.hidden = !repeating;
   els.form.closest(".card").classList.toggle("is-editing", editing);
+  renderPays();
+}
+
+function renderPays() {
+  const account = currentAccount();
+  const noun = payNoun(account);
+  const list = paysOf(account);
+  els.cardField.hidden = !ACCOUNTS[account];
+  document.getElementById("card-label").textContent = `${noun} 종류`;
+  els.cardNew.placeholder = `새 ${noun}`;
+  els.cardNew.setAttribute("aria-label", `새 ${noun}`);
+  const previous = preferPayId || selectedPay[account];
+  const switched = payAccountShown !== account;
+  payAccountShown = account;
+  preferPayId = null;
+  selectedPay[account] = list.some((pay) => pay.id === previous) ? previous : "";
+  els.cardPicks.innerHTML = list.length
+    ? list.map((pay) => {
+      const on = pay.id === selectedPay[account];
+      return `<span class="card-chip"><button type="button" class="category-pick${on ? " is-selected" : ""}" data-card-pick="${esc(pay.id)}" aria-pressed="${on}">${esc(pay.name)}</button><button type="button" class="text-btn danger card-remove" data-card-delete="${esc(pay.id)}" data-label="×" aria-label="삭제">×</button></span>`;
+    }).join("")
+    : `<p class="empty">${noun} 종류를 추가해 주세요.</p>`;
+  if (switched) els.cardNew.value = "";
+  if (!list.length) els.cardAdd.hidden = false;
+  else if (switched) els.cardAdd.hidden = true;
 }
 
 function renderCatalog() {
@@ -674,34 +769,54 @@ function renderList() {
       <section>
         <div class="day-head">
           <strong>${Number(month)}월 ${Number(day)}일 ${weekday(date)}요일</strong>
-          <span class="day-sum">${parts.join(" · ")}</span>
+          <span class="day-tools">
+            <span class="day-sum">${parts.join(" · ")}</span>
+            <button type="button" class="secondary" data-add-day="${date}">추가</button>
+          </span>
         </div>
         <ul class="tx-list">
-          ${items.map(txRow).join("")}
+          ${items.map((tx) => txRow(tx, true)).join("")}
         </ul>
       </section>
     `;
   }).join("");
 }
 
-function txRow(tx) {
+function txGlyph(kind) {
+  const pencil = `<path d="M4 16.6V20h3.4L18.7 8.7a1.9 1.9 0 0 0-2.7-2.7L4.7 16.3 4 16.6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M13.6 6.4l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>`;
+  const trash = `<path d="M5 7h14M9 7V5h6v2M7.5 7l.8 13h7.4l.8-13M10 11v6M14 11v6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>`;
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">${kind === "edit" ? pencil : trash}</svg>`;
+}
+
+function txActions(tx) {
+  return `
+    <button type="button" class="tx-icon" data-edit="${esc(tx.id)}" aria-label="수정">${txGlyph("edit")}</button>
+    <button type="button" class="tx-icon danger" data-delete="${esc(tx.id)}" data-label="삭제" aria-label="삭제">${txGlyph("delete")}</button>
+  `;
+}
+
+function txRow(tx, inline) {
   const category = categoryById(tx.categoryId);
   const name = category ? category.name : "삭제된 품목";
   const color = category ? safeColor(category.color) : "#999999";
   const sign = tx.kind === "income" ? "+" : "−";
   const editing = tx.id === editingId ? " is-editing" : "";
   const note = tx.note ? `<span class="tx-note" title="${esc(tx.note)}">${esc(tx.note)}</span>` : `<span class="tx-note"></span>`;
-  const account = ACCOUNTS[tx.account] ? `<span class="pay-badge">${ACCOUNTS[tx.account]}</span>` : "";
+  const accountName = accountLabel(tx.account, tx.payId);
+  const account = accountName ? `<span class="pay-badge">${esc(accountName)}</span>` : "";
+  const actions = txActions(tx);
   return `
-    <li class="tx${editing}" data-tx="${esc(tx.id)}">
-      <span class="dot" style="background:${color}"></span>
-      <span class="tx-cat">${esc(name)}${account}${tx.recurringId ? `<span class="repeat-badge">반복</span>` : ""}</span>
-      ${note}
-      <span class="tx-amt ${tx.kind}">${sign}${formatWon(tx.amount)}</span>
-      <span class="tx-actions">
-        <button type="button" data-edit="${esc(tx.id)}">수정</button>
-        <button type="button" class="danger" data-delete="${esc(tx.id)}">삭제</button>
-      </span>
+    <li class="tx${editing}${inline ? " tx-static" : ""}" data-tx="${esc(tx.id)}">
+      <div class="tx-swipe">
+        ${inline ? "" : `<div class="tx-reveal" aria-hidden="true" inert>${actions}</div>`}
+        <div class="tx-face">
+          <span class="dot" style="background:${color}"></span>
+          <span class="tx-cat">${esc(name)}${account}${tx.recurringId ? `<span class="repeat-badge">반복</span>` : ""}</span>
+          ${note}
+          <span class="tx-amt ${tx.kind}">${sign}${formatWon(tx.amount)}</span>
+          ${inline ? `<span class="tx-inline">${actions}</span>` : ""}
+        </div>
+      </div>
     </li>
   `;
 }
@@ -914,7 +1029,6 @@ function renderDayPanel() {
     els.dayPanel.innerHTML = "";
     return;
   }
-  const [year, month, day] = date.split("-").map(Number);
   const totals = dayTotals(date);
   const rows = [...totals.list].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const parts = [];
@@ -926,10 +1040,11 @@ function renderDayPanel() {
   els.dayPanel.classList.toggle("is-empty", rows.length === 0);
   els.dayPanel.innerHTML = `
     <div class="list-head">
-      <h2>${month}월 ${day}일 ${weekday(date)}요일</h2>
-      <button type="button" class="secondary" data-add-day="${date}">이 날 입력</button>
+      <button type="button" class="secondary" data-add-day="${date}">${rows.length ? "추가" : "이 날 입력"}</button>
     </div>
-    ${rows.length ? `<p class="day-panel-sum">${parts.join(" · ")}</p>${body}` : ""}
+    <div class="day-scroll">
+      ${rows.length ? `<p class="day-panel-sum">${parts.join(" · ")}</p>${body}` : ""}
+    </div>
   `;
 }
 
@@ -985,7 +1100,7 @@ function renderRecurring() {
             <span class="dot" style="background:${category ? safeColor(category.color) : "#999999"}"></span>
             <span class="rule-body">
               <span class="rule-title">${esc(category ? category.name : "삭제된 품목")} · ${when} ${kind}</span>
-              <span class="rule-meta">${formatWon(rule.amount)}${ACCOUNTS[rule.account] ? ` · ${ACCOUNTS[rule.account]}` : ""}${rule.note ? ` · ${esc(rule.note)}` : ""} · 앞으로 ${upcoming}건</span>
+              <span class="rule-meta">${formatWon(rule.amount)}${accountLabel(rule.account, rule.payId) ? ` · ${esc(accountLabel(rule.account, rule.payId))}` : ""}${rule.note ? ` · ${esc(rule.note)}` : ""} · 앞으로 ${upcoming}건</span>
             </span>
             <button type="button" class="text-btn danger" data-label="중단" data-stop-recurring="${esc(rule.id)}">중단</button>
           </li>
@@ -1254,7 +1369,7 @@ function workbookXml(rows, start, end) {
       sheetCell(incomeRow ? "수입" : "지출", "String", incomeRow ? "incomeKind" : "expenseKind"),
       sheetCell(category ? category.name : "삭제된 품목", "String", base),
       sheetCell(tx.note, "String", base),
-      sheetCell(ACCOUNTS[tx.account] || "", "String", center),
+      sheetCell(accountLabel(tx.account, tx.payId), "String", center),
       sheetCell(tx.recurringId ? "반복" : "", "String", center),
       sheetCell(tx.amount, "Number", incomeRow ? "incomeMoney" : "expenseMoney"),
       sheetCell(incomeRow ? 0 : tx.amount, "Number", "hiddenNumber"),
@@ -1561,6 +1676,13 @@ function readForm() {
     setFormError("카드, 체크카드, 통장 중 하나를 선택해 주세요.");
     return null;
   }
+  const list = paysOf(account);
+  const pay = payById(selectedPay[account]);
+  if (!pay || pay.account !== account) {
+    setFormError(list.length ? `${payNoun(account)} 종류를 골라 주세요.` : `${payNoun(account)} 종류를 추가해 주세요.`);
+    return null;
+  }
+  const payId = pay.id;
   if (!digits || !Number.isInteger(amount) || amount <= 0 || amount > 100000000000) {
     setFormError("금액은 1원 이상 입력해 주세요.");
     els.amountDisplay.focus();
@@ -1582,7 +1704,7 @@ function readForm() {
     return null;
   }
   setFormError("");
-  return { date, kind, categoryId, account, amount, note, repeat, repeatUntil: repeatUntil || null };
+  return { date, kind, categoryId, account, payId, amount, note, repeat, repeatUntil: repeatUntil || null };
 }
 
 function resetForm() {
@@ -1593,6 +1715,9 @@ function resetForm() {
   els.repeatUntil.value = "";
   setKind("expense");
   setAccount("card");
+  selectedPay.card = "";
+  selectedPay.check = "";
+  selectedPay.bank = "";
   resetCalc();
   setFormError("");
   renderSelect();
@@ -1648,6 +1773,7 @@ function startEdit(id) {
   setCalcAmount(tx.amount);
   setKind(tx.kind);
   setAccount(ACCOUNTS[tx.account] ? tx.account : "bank");
+  if (ACCOUNTS[tx.account]) selectedPay[tx.account] = tx.payId || "";
   preferCategoryId = tx.categoryId;
   setFormError("");
   ui.selectedDate = tx.date;
@@ -1667,6 +1793,7 @@ function saveTransaction(data) {
     tx.categoryId = data.categoryId;
     tx.amount = data.amount;
     tx.account = data.account;
+    tx.payId = data.payId;
     tx.note = data.note;
     tx.recurringId = null;
     focusId = tx.id;
@@ -1680,6 +1807,7 @@ function saveTransaction(data) {
       categoryId: data.categoryId,
       amount: data.amount,
       account: data.account,
+      payId: data.payId,
       note: data.note,
       frequency: data.repeat,
       startDate: data.date,
@@ -1697,6 +1825,7 @@ function saveTransaction(data) {
         categoryId: data.categoryId,
         amount: data.amount,
         account: data.account,
+        payId: data.payId,
         note: data.note,
         recurringId,
         createdAt,
@@ -1715,6 +1844,7 @@ function saveTransaction(data) {
       categoryId: data.categoryId,
       amount: data.amount,
       account: data.account,
+      payId: data.payId,
       note: data.note,
       recurringId: null,
       createdAt: new Date().toISOString(),
@@ -1742,6 +1872,47 @@ function stopRecurring(id) {
 function deleteTransaction(id) {
   if (editingId === id) resetForm();
   state.transactions = state.transactions.filter((tx) => tx.id !== id);
+  commit();
+}
+
+function addPay(raw) {
+  const account = currentAccount();
+  const noun = payNoun(account);
+  const name = raw.trim();
+  if (!name) {
+    toast(`${noun} 이름을 입력해 주세요.`);
+    return false;
+  }
+  if (name.length > 20) {
+    toast(`${noun} 이름은 20자까지 입력할 수 있습니다.`);
+    return false;
+  }
+  if (paysOf(account).some((pay) => pay.name === name)) {
+    toast(`이미 있는 ${noun}입니다.`);
+    return false;
+  }
+  if (paysOf(account).length >= 30) {
+    toast(`${withTopic(noun)} 30개까지 넣을 수 있습니다.`);
+    return false;
+  }
+  const pay = { id: uid(), name, account };
+  state.pays.push(pay);
+  preferPayId = pay.id;
+  commit();
+  return true;
+}
+
+function deletePay(id) {
+  const pay = payById(id);
+  const noun = payNoun(pay ? pay.account : currentAccount());
+  const used = state.transactions.some((tx) => tx.payId === id)
+    || state.recurring.some((rule) => rule.active && rule.payId === id);
+  if (used) {
+    toast(`이 ${withJosa(noun, ["으로", "로"])} 적힌 내역이 있어 삭제할 수 없습니다.`);
+    return;
+  }
+  state.pays = state.pays.filter((item) => item.id !== id);
+  if (pay && selectedPay[pay.account] === id) selectedPay[pay.account] = "";
   commit();
 }
 
@@ -1816,15 +1987,108 @@ function armDelete(type, id, button) {
     if (type === "tx") deleteTransaction(id);
     else if (type === "rule") stopRecurring(id);
     else if (type === "goal") deleteGoal(id);
+    else if (type === "card") deletePay(id);
     else deleteCategory(id);
     return;
   }
   clearPendingDelete();
   pending.type = type;
   pending.id = id;
-    button.textContent = type === "rule" ? "중단 확인" : "삭제 확인";
+    if (button.classList.contains("tx-icon")) {
+      button.textContent = "확인";
+      button.setAttribute("aria-label", "확인");
+    }
+    else if (type === "card") {
+      button.textContent = "×";
+      button.setAttribute("aria-label", "삭제 확인");
+    } else button.textContent = type === "rule" ? "중단 확인" : "삭제 확인";
   button.classList.add("is-confirm");
   pending.timer = setTimeout(clearPendingDelete, 2500);
+}
+
+const TX_SWIPE = 112;
+let txDrag = null;
+let txSwipeMoved = false;
+
+function settleTx(row, open) {
+  if (!row) return;
+  row.classList.toggle("is-open", open);
+  row.classList.remove("is-dragging");
+  const face = row.querySelector(".tx-face");
+  if (face) face.style.transform = open ? `translateX(-${TX_SWIPE}px)` : "";
+  const reveal = row.querySelector(".tx-reveal");
+  if (reveal) {
+    reveal.setAttribute("aria-hidden", open ? "false" : "true");
+    reveal.inert = !open;
+  }
+}
+
+function closeOpenTx(except) {
+  document.querySelectorAll(".tx.is-open").forEach((row) => {
+    if (row !== except) settleTx(row, false);
+  });
+}
+
+function bindTxSwipe() {
+  document.addEventListener("pointerdown", (event) => {
+    if (txDrag) return;
+    if (event.target.closest("button")) return;
+    const face = event.target.closest(".tx-face");
+    if (!face || face.closest(".tx-static")) {
+      closeOpenTx();
+      return;
+    }
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    const row = face.closest(".tx");
+    txDrag = {
+      pointerId: event.pointerId,
+      row,
+      face,
+      startX: event.clientX,
+      startY: event.clientY,
+      base: row.classList.contains("is-open") ? -TX_SWIPE : 0,
+      axis: "",
+      x: row.classList.contains("is-open") ? -TX_SWIPE : 0,
+    };
+  });
+  document.addEventListener("pointermove", (event) => {
+    if (!txDrag || event.pointerId !== txDrag.pointerId) return;
+    const dx = event.clientX - txDrag.startX;
+    const dy = event.clientY - txDrag.startY;
+    if (!txDrag.axis) {
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      txDrag.axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+      if (txDrag.axis === "y") {
+        txDrag = null;
+        return;
+      }
+      txDrag.row.classList.add("is-dragging");
+      closeOpenTx(txDrag.row);
+    }
+    const next = Math.max(-TX_SWIPE, Math.min(0, txDrag.base + dx));
+    txDrag.x = next;
+    txDrag.face.style.transform = `translateX(${next}px)`;
+  }, { passive: true });
+  function endTxDrag(event) {
+    if (!txDrag || event.pointerId !== txDrag.pointerId) return;
+    const current = txDrag;
+    txDrag = null;
+    if (current.axis !== "x") {
+      if (current.base < 0) settleTx(current.row, false);
+      else closeOpenTx();
+      return;
+    }
+    txSwipeMoved = true;
+    settleTx(current.row, current.x < -TX_SWIPE / 2);
+  }
+  document.addEventListener("pointerup", endTxDrag);
+  document.addEventListener("pointercancel", endTxDrag);
+  document.addEventListener("click", (event) => {
+    if (!txSwipeMoved || !event.target.closest(".tx")) return;
+    txSwipeMoved = false;
+    event.preventDefault();
+    event.stopPropagation();
+  }, true);
 }
 
 function bind() {
@@ -1903,9 +2167,33 @@ function bind() {
   els.form.querySelectorAll('input[name="kind"]').forEach((input) => {
     input.addEventListener("change", () => {
       renderSelect();
-      renderFormMode();
       if (!editingId) setAccount(currentKind() === "income" ? "bank" : "card");
+      renderFormMode();
     });
+  });
+  els.form.querySelectorAll('input[name="account"]').forEach((input) => {
+    input.addEventListener("change", () => renderPays());
+  });
+  els.cardPicks.addEventListener("click", (event) => {
+    const pick = event.target.closest("[data-card-pick]");
+    if (!pick) return;
+    selectedPay[currentAccount()] = pick.dataset.cardPick;
+    renderPays();
+  });
+  document.getElementById("card-add-toggle").addEventListener("click", () => {
+    els.cardAdd.hidden = !els.cardAdd.hidden;
+    if (!els.cardAdd.hidden) els.cardNew.focus();
+  });
+  document.getElementById("card-add-submit").addEventListener("click", () => {
+    if (addPay(els.cardNew.value)) {
+      els.cardNew.value = "";
+      els.cardAdd.hidden = true;
+    }
+  });
+  els.cardNew.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    document.getElementById("card-add-submit").click();
   });
   els.form.addEventListener("click", (event) => {
     const key = event.target.closest("[data-key]");
@@ -1981,10 +2269,12 @@ function bind() {
     event.preventDefault();
     input.blur();
   });
+  bindTxSwipe();
   document.body.addEventListener("click", (event) => {
     const edit = event.target.closest("[data-edit]");
     const remove = event.target.closest("[data-delete]");
     const removeCategory = event.target.closest("[data-cat-delete]");
+    const removeCard = event.target.closest("[data-card-delete]");
     const filter = event.target.closest("[data-filter]");
     const day = event.target.closest("[data-day]");
     const addDay = event.target.closest("[data-add-day]");
@@ -1994,6 +2284,7 @@ function bind() {
     if (edit) startEdit(edit.dataset.edit);
     else if (remove) armDelete("tx", remove.dataset.delete, remove);
     else if (removeCategory) armDelete("cat", removeCategory.dataset.catDelete, removeCategory);
+    else if (removeCard) armDelete("card", removeCard.dataset.cardDelete, removeCard);
     else if (filter) {
       ui.filter = filter.dataset.filter;
       renderList();
