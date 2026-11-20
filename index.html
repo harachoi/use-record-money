@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f3efe8">
+  <title>가계부</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231f3d36'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-size='15' fill='%23f6f1e8' font-family='sans-serif'%3E원%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css?v=19">
+</head>
+<body class="is-calendar">
+  <div class="app">
+    <header class="top">
+      <div class="month-nav">
+        <h1 class="month-picker">
+          <button type="button" id="month-label" class="month-label" aria-haspopup="dialog" aria-expanded="false" aria-controls="month-panel">이번 달</button>
+          <div id="month-panel" class="month-panel" role="dialog" aria-label="연월 선택" hidden>
+            <label class="year-field">
+              <span>연도</span>
+              <select id="year-select"></select>
+            </label>
+            <div id="month-grid" class="month-grid"></div>
+          </div>
+        </h1>
+      </div>
+    </header>
+
+    <main>
+      <section id="view-calendar" class="view" role="tabpanel" aria-labelledby="tab-calendar">
+        <section class="card calendar-card">
+          <div id="calendar"></div>
+        </section>
+        <section class="card list-card" id="day-panel"></section>
+      </section>
+
+      <section id="view-entry" class="view" hidden>
+          <section class="card composer">
+            <div class="card-head">
+              <h2 id="form-title">내역 입력</h2>
+              <p id="form-hint">날짜와 품목을 고르고, 결제 수단과 계산기로 금액을 넣으면 이 달에 바로 쌓입니다.</p>
+            </div>
+            <form id="entry-form" autocomplete="off">
+              <div class="form-grid">
+                <div class="field">
+                  <label for="date">날짜</label>
+                  <input id="date" name="date" type="date" required>
+                </div>
+                <div class="field">
+                  <span id="kind-label">구분</span>
+                  <div class="segment" role="radiogroup" aria-labelledby="kind-label">
+                    <label>
+                      <input type="radio" name="kind" value="expense" checked>
+                      <span>지출</span>
+                    </label>
+                    <label>
+                      <input type="radio" name="kind" value="income">
+                      <span>수입</span>
+                    </label>
+                  </div>
+                </div>
+                <div class="field span-2">
+                  <div class="field-head">
+                    <label id="category-label">품목</label>
+                    <button type="button" class="text-link" id="category-add-toggle">추가</button>
+                  </div>
+                  <div id="category-picks" class="category-picks" role="radiogroup" aria-labelledby="category-label"></div>
+                  <div id="category-add" class="cat-add" hidden>
+                    <input id="category-new" maxlength="20" placeholder="새 품목" aria-label="새 품목" spellcheck="false">
+                    <button type="button" class="secondary" id="category-add-submit">추가</button>
+                  </div>
+                  <select id="category" name="category" required hidden></select>
+                </div>
+                <div class="field span-2">
+                  <span id="pay-label">결제</span>
+                  <div class="segment cols-3" role="radiogroup" aria-labelledby="pay-label">
+                    <label>
+                      <input type="radio" name="account" value="card" checked>
+                      <span>카드</span>
+                    </label>
+                    <label>
+                      <input type="radio" name="account" value="check">
+                      <span>체크카드</span>
+                    </label>
+                    <label>
+                      <input type="radio" name="account" value="bank">
+                      <span>통장</span>
+                    </label>
+                  </div>
+                </div>
+                <div class="field span-2">
+                  <span id="amount-label">금액</span>
+                  <div class="calc" role="group" aria-labelledby="amount-label">
+                    <p id="calc-expr" class="calc-expr"></p>
+                    <div class="calc-screen">
+                      <output id="amount-display" tabindex="-1" aria-live="polite">0</output>
+                      <button type="button" data-key="back" aria-label="한 자리 지우기">←</button>
+                      <button type="button" data-key="clear" aria-label="모두 지우기">C</button>
+                    </div>
+                    <div class="keypad">
+                      <button type="button" data-key="7">7</button>
+                      <button type="button" data-key="8">8</button>
+                      <button type="button" data-key="9">9</button>
+                      <button type="button" class="op" data-key="/">÷</button>
+                      <button type="button" data-key="4">4</button>
+                      <button type="button" data-key="5">5</button>
+                      <button type="button" data-key="6">6</button>
+                      <button type="button" class="op" data-key="*">×</button>
+                      <button type="button" data-key="1">1</button>
+                      <button type="button" data-key="2">2</button>
+                      <button type="button" data-key="3">3</button>
+                      <button type="button" class="op" data-key="-">−</button>
+                      <button type="button" data-key="0">0</button>
+                      <button type="button" data-key="00">00</button>
+                      <button type="button" class="op" data-key="+">+</button>
+                      <button type="button" class="eq" data-key="=">=</button>
+                    </div>
+                  </div>
+                  <input id="amount" name="amount" type="hidden" value="">
+                </div>
+                <div class="field span-2">
+                  <label for="note">내용 <span class="optional">선택</span></label>
+                  <input id="note" name="note" type="text" maxlength="40" placeholder="예: 점심, 지하철, 월급">
+                </div>
+                <div class="field" id="repeat-field">
+                  <label for="repeat">반복</label>
+                  <select id="repeat">
+                    <option value="none">없음</option>
+                    <option value="weekly">매주</option>
+                    <option value="monthly">매달</option>
+                  </select>
+                </div>
+                <div class="field" id="repeat-until-field" hidden>
+                  <label for="repeat-until">종료일 <span class="optional">선택</span></label>
+                  <input id="repeat-until" type="date">
+                </div>
+                <p id="repeat-hint" class="repeat-hint span-2" hidden>종료일을 비우면 12번 넣습니다. 31일은 그 달의 마지막 날에 맞춥니다.</p>
+                <div class="form-actions span-2">
+                  <p id="form-error" class="form-error" role="alert" hidden></p>
+                  <div class="action-row">
+                    <button type="submit" class="primary" id="submit-btn">지출 추가</button>
+                    <button type="button" class="ghost" id="cancel-btn" hidden>취소</button>
+                  </div>
+                </div>
+              </div>
+            </form>
+          </section>
+      </section>
+
+      <section id="view-ledger" class="view" role="tabpanel" aria-labelledby="tab-ledger" hidden>
+        <section class="card list-card">
+          <div class="list-head">
+            <h2>내역 <span id="tx-count"></span></h2>
+            <div class="filters" role="group" aria-label="내역 필터">
+              <button type="button" data-filter="all" aria-pressed="true">전체</button>
+              <button type="button" data-filter="expense" aria-pressed="false">지출</button>
+              <button type="button" data-filter="income" aria-pressed="false">수입</button>
+            </div>
+          </div>
+          <div id="tx-list"></div>
+        </section>
+      </section>
+
+      <section id="view-analysis" class="view" role="tabpanel" aria-labelledby="tab-analysis" hidden>
+        <div id="analysis-body"></div>
+        <section class="card goal-card">
+          <div class="card-head goal-head">
+            <div>
+              <h2>사용 목표</h2>
+              <p>기간과 쓰려는 금액을 정하면, 그 사이에 쓴 돈과 남은 돈을 보여 줍니다.</p>
+            </div>
+            <button type="button" class="secondary" id="goal-open">목표 추가하기</button>
+          </div>
+          <div id="goal-list"></div>
+        </section>
+      </section>
+
+      <section id="view-settings" class="view" role="tabpanel" aria-labelledby="tab-settings" hidden>
+        <section class="card export-card">
+          <div class="card-head">
+            <h2>엑셀로 추출</h2>
+            <p>시작일과 종료일을 고르면, 그 사이 내역을 엑셀 파일로 받습니다. 파일에서 품목을 걸러 보고, 품목별 시트에서 비중을 볼 수 있습니다.</p>
+          </div>
+          <form id="export-form" autocomplete="off">
+            <div class="form-grid">
+              <div class="field">
+                <label for="export-start">시작일</label>
+                <input id="export-start" type="date" required>
+              </div>
+              <div class="field">
+                <label for="export-end">종료일</label>
+                <input id="export-end" type="date" required>
+              </div>
+              <div class="form-actions span-2">
+                <p id="export-error" class="form-error" role="alert" hidden></p>
+                <button type="submit" class="primary">엑셀로 추출</button>
+              </div>
+            </div>
+          </form>
+        </section>
+        <section class="card catalog" id="catalog" aria-label="품목 설정"></section>
+        <section class="card recurring-card" id="recurring" hidden></section>
+      </section>
+    </main>
+
+    <p class="footnote">기록은 이 브라우저에만 저장됩니다. 다른 기기와는 공유되지 않습니다.</p>
+    <div class="tabs" role="tablist" aria-label="화면 전환">
+      <button type="button" id="tab-calendar" role="tab" aria-controls="view-calendar" aria-selected="true">달력</button>
+      <button type="button" id="tab-ledger" role="tab" aria-controls="view-ledger" aria-selected="false">내역</button>
+      <button type="button" id="tab-analysis" role="tab" aria-controls="view-analysis" aria-selected="false">분석</button>
+      <button type="button" id="tab-settings" role="tab" aria-controls="view-settings" aria-selected="false">설정</button>
+    </div>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <div id="goal-dialog" class="mini-dialog" role="dialog" aria-modal="true" aria-labelledby="goal-dialog-title" hidden>
+    <button type="button" class="mini-backdrop" id="goal-backdrop" aria-label="닫기"></button>
+    <form id="goal-form" class="mini-sheet" autocomplete="off">
+      <h2 id="goal-dialog-title">목표 추가</h2>
+      <div class="form-grid">
+        <div class="field span-2">
+          <label for="goal-name">이름 <span class="optional">선택</span></label>
+          <input id="goal-name" maxlength="20" placeholder="예: 11월 생활비">
+        </div>
+        <div class="field">
+          <label for="goal-start">시작일</label>
+          <input id="goal-start" type="date" required>
+        </div>
+        <div class="field">
+          <label for="goal-end">종료일</label>
+          <input id="goal-end" type="date" required>
+        </div>
+        <div class="field span-2">
+          <label for="goal-amount">목표 금액</label>
+          <input id="goal-amount" type="text" inputmode="numeric" maxlength="16" required>
+        </div>
+        <div class="form-actions span-2">
+          <p id="goal-error" class="form-error" role="alert" hidden></p>
+          <div class="action-row">
+            <button type="submit" class="primary" id="goal-submit">추가</button>
+            <button type="button" class="ghost" id="goal-cancel">취소</button>
+          </div>
+        </div>
+      </div>
+    </form>
+  </div>
+  <div id="date-popover" class="date-popover" role="dialog" aria-label="날짜 선택" hidden>
+    <div class="date-pop-head">
+      <button type="button" class="date-nav" data-date-shift="-1" aria-label="이전 달">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button type="button" class="date-pop-title" id="date-pop-title" aria-expanded="false">날짜</button>
+      <button type="button" class="date-nav" data-date-shift="1" aria-label="다음 달">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M9.5 6.5 15 12l-5.5 5.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+    <div id="date-pop-days">
+      <div class="date-week" aria-hidden="true"><span>일</span><span>월</span><span>화</span><span>수</span><span>목</span><span>금</span><span>토</span></div>
+      <div id="date-grid" class="date-grid"></div>
+    </div>
+    <div id="date-pop-months" hidden>
+      <label class="year-field">
+        <span>연도</span>
+        <select id="date-year"></select>
+      </label>
+      <div id="date-month-grid" class="date-month-grid"></div>
+    </div>
+    <div class="date-pop-foot">
+      <button type="button" class="date-today" id="date-today">오늘</button>
+    </div>
+  </div>
+  <script src="app.js?v=17"></script>
+</body>
+</html>
